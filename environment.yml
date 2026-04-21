@@ -8,6 +8,7 @@ dependencies:
   - petsc4py
   - slepc=*=*complex*
   - slepc4py
+  - dolfinx_mpc=0.9.*
   - mpich
   - mpi4py>=4.0
   - gmsh>=4.11
