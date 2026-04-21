@@ -49,20 +49,35 @@ def _surface_group_points(mesh: meshio.Mesh, group_name: str) -> np.ndarray:
     return mesh.points[node_ids, :3]
 
 
-def _assert_periodic_pair(mesh: meshio.Mesh, group_m: str, group_p: str, shift_xy: np.ndarray, tol: float = 1.5e-3) -> None:
-    pts_m = _surface_group_points(mesh, group_m)
-    pts_p = _surface_group_points(mesh, group_p)
+def _assert_strict_periodic(mesh: meshio.Mesh, src_group: str, dst_group: str, translation_xy: np.ndarray, tol: float = 1e-7) -> None:
+    """Bidirectional node-matched periodicity check.
 
-    assert len(pts_m) > 0 and len(pts_p) > 0, f"Empty periodic group in {group_m}/{group_p}"
+    Asserts that (a) the two physical groups have identical node counts, and
+    (b) shifting every src-side node by +translation lands within `tol` of a
+    dst-side node, and (c) shifting every dst-side node by -translation lands
+    within `tol` of a src-side node. This is the pairing guarantee required
+    by dolfinx_mpc.MultiPointConstraint for Bloch PBC assembly.
+    """
+    src = _surface_group_points(mesh, src_group)
+    dst = _surface_group_points(mesh, dst_group)
 
-    shifted = pts_m.copy()
-    shifted[:, :2] += shift_xy
+    assert len(src) == len(dst), (
+        f"node count mismatch {src_group}={len(src)} vs {dst_group}={len(dst)}"
+    )
 
-    # The + side can be a strict subset depending on clipped half-stubs; enforce
-    # that every +side node is represented on the shifted -side.
-    tree = cKDTree(shifted)
-    dists, _ = tree.query(pts_p, k=1)
-    assert float(np.max(dists)) < tol, f"{group_p} is not represented by shifted {group_m}, max_dist={np.max(dists):.3e}"
+    t3 = np.array([translation_xy[0], translation_xy[1], 0.0], dtype=float)
+
+    tree_dst = cKDTree(dst)
+    d_fwd, _ = tree_dst.query(src + t3)
+    assert float(d_fwd.max()) < tol, (
+        f"{src_group}->{dst_group} forward max dist {d_fwd.max():.3e} > tol {tol:.1e}"
+    )
+
+    tree_src = cKDTree(src)
+    d_rev, _ = tree_src.query(dst - t3)
+    assert float(d_rev.max()) < tol, (
+        f"{dst_group}->{src_group} reverse max dist {d_rev.max():.3e} > tol {tol:.1e}"
+    )
 
 
 @pytest.mark.parametrize("ratio", [0.5, 1.0, 1.5])
@@ -73,11 +88,17 @@ def test_element_count(ratio: float) -> None:
 
 
 @pytest.mark.parametrize("ratio", [0.5, 1.0, 1.5])
-def test_periodic_facet_pairs(ratio: float) -> None:
+def test_exact_node_periodicity_a1(ratio: float) -> None:
     mesh = _load_mesh(ratio)
-    a1, a2 = lattice_vectors(A)
-    _assert_periodic_pair(mesh, "f1m", "f1p", shift_xy=a1)
-    _assert_periodic_pair(mesh, "f2m", "f2p", shift_xy=a2)
+    a1, _ = lattice_vectors(A)
+    _assert_strict_periodic(mesh, "f1m", "f1p", translation_xy=a1)
+
+
+@pytest.mark.parametrize("ratio", [0.5, 1.0, 1.5])
+def test_exact_node_periodicity_a2(ratio: float) -> None:
+    mesh = _load_mesh(ratio)
+    _, a2 = lattice_vectors(A)
+    _assert_strict_periodic(mesh, "f2m", "f2p", translation_xy=a2)
 
 
 def test_c3_symmetry_at_ratio_1() -> None:

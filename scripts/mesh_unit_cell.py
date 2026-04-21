@@ -66,27 +66,156 @@ def _add_beam_volume(start: np.ndarray, end: np.ndarray, width: float, h: float,
     return vol_tags[0], point_tags
 
 
-def _collect_periodic_surfaces(final_vols: list[tuple[int, int]], a: float, tol: float = 2e-2) -> dict[str, list[int]]:
-    side_groups = {"f1m": [], "f1p": [], "f2m": [], "f2p": []}
+def _build_bond_specs(a: float, w_intra: float, w_inter: float) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    """Build a deduplicated set of breathing-kagome bonds around the unit cell.
+
+    We include a 3x3 neighborhood of lattice translations and clip against the
+    unit-cell prism. This guarantees periodic boundary cuts on opposite sides.
+    """
+    a1, a2 = lattice_vectors(a)
+
+    def _sites(R: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        A = R
+        B = R + 0.5 * a1
+        C = R + 0.5 * a2
+        return A, B, C
+
+    def _bond_key(p: np.ndarray, q: np.ndarray) -> tuple[tuple[float, float], tuple[float, float]]:
+        p_key = tuple(np.round(p, 10))
+        q_key = tuple(np.round(q, 10))
+        return tuple(sorted((p_key, q_key)))
+
+    specs: list[tuple[np.ndarray, np.ndarray, float]] = []
+    seen: set[tuple[tuple[float, float], tuple[float, float]]] = set()
+
+    for i in (-1, 0, 1):
+        for j in (0, 1):
+            R = i * a1 + j * a2
+            A, B, C = _sites(R)
+
+            bonds = [
+                (A, B, w_intra),
+                (B, C, w_intra),
+                (C, A, w_intra),
+                (A, B + a1, w_inter),
+                (B, C + (a2 - a1), w_inter),
+                (A, C + a2, w_inter),
+            ]
+
+            for p, q, w in bonds:
+                k = _bond_key(p, q)
+                if k in seen:
+                    continue
+                seen.add(k)
+                specs.append((np.asarray(p, dtype=float), np.asarray(q, dtype=float), float(w)))
+
+    return specs
+
+
+def _collect_periodic_surfaces(final_vols: list[tuple[int, int]], a: float, h: float, tol: float = 2e-2) -> dict[str, list[int]]:
+    side_groups: dict[str, list[int]] = {"f1m": [], "f1p": [], "f2m": [], "f2p": []}
+    plane_tol = 1e-8
 
     boundaries = gmsh.model.getBoundary(final_vols, oriented=False, recursive=False)
     for dim, tag in boundaries:
         if dim != 2:
             continue
 
-        cx, cy, _cz = gmsh.model.occ.getCenterOfMass(dim, tag)
-        st = barycentric_coords(np.array([[cx, cy]], dtype=float), a=a)[0]
+        _xmin, _ymin, zmin, _xmax, _ymax, zmax = gmsh.model.occ.getBoundingBox(dim, tag)
+        if (zmax - zmin) < 0.9 * h:
+            continue
 
-        if abs(st[0]) < tol:
-            side_groups["f1m"].append(tag)
-        if abs(st[0] - 1.0) < tol:
-            side_groups["f1p"].append(tag)
-        if abs(st[1]) < tol:
-            side_groups["f2m"].append(tag)
-        if abs(st[1] - 1.0) < tol:
-            side_groups["f2p"].append(tag)
+        # Use all surface vertices: periodic faces are clipping faces on unit-cell
+        # boundary planes s=0/1 and t=0/1 in lattice coordinates.
+        pts = []
+        sub = gmsh.model.getBoundary([(2, tag)], oriented=False, recursive=True)
+        for dsub, tsub in sub:
+            if dsub != 0:
+                continue
+            x, y, _z = gmsh.model.getValue(0, tsub, [])
+            pts.append([x, y])
+        if not pts:
+            continue
+        st = barycentric_coords(np.asarray(pts, dtype=float), a=a)
+        s = st[:, 0]
+        t = st[:, 1]
+        dists = {
+            "f1m": float(np.max(np.abs(s))),
+            "f1p": float(np.max(np.abs(s - 1.0))),
+            "f2m": float(np.max(np.abs(t))),
+            "f2p": float(np.max(np.abs(t - 1.0))),
+        }
+        ordered = sorted(dists.items(), key=lambda kv: kv[1])
+        (best_side, best_d), (_second_side, second_d) = ordered[0], ordered[1]
 
-    return {k: sorted(set(v)) for k, v in side_groups.items()}
+        if best_d > plane_tol:
+            continue
+
+        if second_d < 10.0 * best_d:
+            cx, cy, _cz = gmsh.model.occ.getCenterOfMass(dim, tag)
+            raise RuntimeError(
+                f"Corner ambiguity for face tag={tag} at centroid=({cx:+.6e},{cy:+.6e}): "
+                f"distances f1m={dists['f1m']:.3e} f1p={dists['f1p']:.3e} "
+                f"f2m={dists['f2m']:.3e} f2p={dists['f2p']:.3e}"
+            )
+
+        side_groups[best_side].append(tag)
+
+    _ = tol  # retained for signature stability; classification is tolerance-free
+    side_groups = {k: sorted(set(v)) for k, v in side_groups.items()}
+    for side in ("f1m", "f1p", "f2m", "f2p"):
+        if len(side_groups[side]) != 1:
+            raise RuntimeError(
+                f"Periodic side {side} expected 1 face, found {len(side_groups[side])}: {side_groups[side]}"
+            )
+    return side_groups
+
+
+def _apply_periodic(master_tags: list[int], slave_tags: list[int], translation_xy: np.ndarray, side_name: str) -> None:
+    """Pair each slave face to its master by centroid-after-translation, then call setPeriodic per pair."""
+    if len(master_tags) != len(slave_tags):
+        raise RuntimeError(
+            f"Periodic side count mismatch for {side_name}: "
+            f"|masters|={len(master_tags)} (tags={master_tags}), "
+            f"|slaves|={len(slave_tags)} (tags={slave_tags})"
+        )
+
+    tx, ty = float(translation_xy[0]), float(translation_xy[1])
+    affine = [
+        1.0, 0.0, 0.0, tx,
+        0.0, 1.0, 0.0, ty,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+    master_centroids = {
+        t: np.array(gmsh.model.occ.getCenterOfMass(2, t)[:2], dtype=float)
+        for t in master_tags
+    }
+
+    matched: set[int] = set()
+    for slave_tag in slave_tags:
+        sc = np.array(gmsh.model.occ.getCenterOfMass(2, slave_tag)[:2], dtype=float)
+        expected_master = sc - np.array([tx, ty], dtype=float)
+
+        best_tag = None
+        best_d = float("inf")
+        for mt, mc in master_centroids.items():
+            if mt in matched:
+                continue
+            d = float(np.linalg.norm(mc - expected_master))
+            if d < best_d:
+                best_d = d
+                best_tag = mt
+
+        if best_tag is None or best_d > 1e-5:
+            raise RuntimeError(
+                f"setPeriodic pairing failed for {side_name}: slave surface {slave_tag} "
+                f"at centroid {sc.tolist()} has no master within 1e-5 m "
+                f"(best master {best_tag}, best dist {best_d:.2e}, translation {translation_xy.tolist()})"
+            )
+        matched.add(best_tag)
+        gmsh.model.mesh.setPeriodic(2, [slave_tag], [best_tag], affine)
 
 
 def generate_unit_cell_mesh(
@@ -116,15 +245,7 @@ def generate_unit_cell_mesh(
 
         cell_vol = _add_cell_prism(a=a, h=h, lc=mesh_size)
 
-        beam_specs: list[tuple[np.ndarray, np.ndarray, float]] = [
-            (A, B, w_intra),
-            (B, C, w_intra),
-            (C, A, w_intra),
-            (A, A + 0.5 * a1, w_inter_eff),
-            (B, B + 0.5 * a1, w_inter_eff),
-            (B, B + 0.5 * (a2 - a1), w_inter_eff),
-            (C, C + 0.5 * a2, w_inter_eff),
-        ]
+        beam_specs = _build_bond_specs(a=a, w_intra=w_intra, w_inter=w_inter_eff)
 
         beam_vols: list[tuple[int, int]] = []
         junction_points: list[int] = []
@@ -133,15 +254,15 @@ def generate_unit_cell_mesh(
             beam_vols.append((3, vol))
             junction_points.extend(pts)
 
-        fused = beam_vols
-        while len(fused) > 1:
-            left = fused[0]
-            right = fused[1]
-            out, _ = gmsh.model.occ.fuse([left], [right], removeObject=True, removeTool=True)
-            fused = [d for d in out if d[0] == 3] + fused[2:]
-
-        clipped, _ = gmsh.model.occ.intersect(fused, [(3, cell_vol)], removeObject=True, removeTool=False)
-        final_vols = [d for d in clipped if d[0] == 3]
+        clipped, _ = gmsh.model.occ.intersect(beam_vols, [(3, cell_vol)], removeObject=True, removeTool=False)
+        clipped_vols = [d for d in clipped if d[0] == 3]
+        if not clipped_vols:
+            raise RuntimeError("Boolean intersection produced no clipped beam volumes")
+        if len(clipped_vols) == 1:
+            final_vols = clipped_vols
+        else:
+            fused, _ = gmsh.model.occ.fuse([clipped_vols[0]], clipped_vols[1:], removeObject=True, removeTool=True)
+            final_vols = [d for d in fused if d[0] == 3]
 
         gmsh.model.occ.synchronize()
 
@@ -151,12 +272,16 @@ def generate_unit_cell_mesh(
         gmsh.model.addPhysicalGroup(3, [tag for _, tag in final_vols], tag=101)
         gmsh.model.setPhysicalName(3, 101, "solid")
 
-        side_groups = _collect_periodic_surfaces(final_vols=final_vols, a=a)
+        side_groups = _collect_periodic_surfaces(final_vols=final_vols, a=a, h=h)
         tag_map = {"f1m": 201, "f1p": 202, "f2m": 203, "f2p": 204}
         for name, surfs in side_groups.items():
             if surfs:
                 gmsh.model.addPhysicalGroup(2, surfs, tag=tag_map[name])
                 gmsh.model.setPhysicalName(2, tag_map[name], name)
+
+        a1_vec, a2_vec = lattice_vectors(a)
+        _apply_periodic(master_tags=side_groups["f1m"], slave_tags=side_groups["f1p"], translation_xy=a1_vec, side_name="f1m->f1p (+a1)")
+        _apply_periodic(master_tags=side_groups["f2m"], slave_tags=side_groups["f2p"], translation_xy=a2_vec, side_name="f2m->f2p (+a2)")
 
         gmsh.model.mesh.generate(3)
 
@@ -182,7 +307,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--w-inter", type=float, default=defaults.w_inter)
     parser.add_argument("--ratio", type=float, default=defaults.w_inter / defaults.w_intra)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--mesh-size", type=float, default=0.0005)
+    parser.add_argument("--mesh-size", type=float, default=0.00052)
     return parser.parse_args()
 
 
