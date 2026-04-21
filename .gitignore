@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Conda
+.conda/
+*.conda-lock.yml
+
+# FEniCSx / mesh / field artifacts
+*.xdmf
+*.h5
+*.msh
+*.vtu
+*.pvd
+*.pvtu
+
+# Results and figures (regenerable)
+results/*.csv
+results/*.npz
+results/*.npy
+results/*.json
+figures/*.pdf
+figures/*.png
+figures/*.svg
+
+# Keep directory markers
+!results/.gitkeep
+!figures/.gitkeep
+!meshes/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch
+STRUCTURE_NOTES.md
+scratch/
+tmp/

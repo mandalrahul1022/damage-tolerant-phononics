@@ -1,0 +1,19 @@
+name: kagome-hoti
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - fenics-dolfinx
+  - gmsh
+  - python-gmsh
+  - mpi4py
+  - petsc4py
+  - slepc4py
+  - pip
+  - pip:
+      - numpy
+      - scipy
+      - matplotlib
+      - h5py
+      - pyvista
+      - meshio
