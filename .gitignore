@@ -52,3 +52,6 @@ tmp/
 node_modules/
 package.json
 package-lock.json
+
+# Env debugging snapshots (local only)
+environment_broken_snapshot.yml
