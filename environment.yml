@@ -3,17 +3,22 @@ channels:
   - conda-forge
 dependencies:
   - python=3.11
-  - fenics-dolfinx
-  - gmsh
-  - python-gmsh
-  - mpi4py
+  - fenics-dolfinx=0.9.*
+  - petsc=*=*complex*
   - petsc4py
+  - slepc=*=*complex*
   - slepc4py
+  - mpich
+  - mpi4py>=4.0
+  - gmsh>=4.11
+  - python-gmsh>=4.11
+  - numpy
+  - scipy
+  - matplotlib
+  - h5py
+  - ipython
+  - pytest
   - pip
   - pip:
-      - numpy
-      - scipy
-      - matplotlib
-      - h5py
       - pyvista
       - meshio
