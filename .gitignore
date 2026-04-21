@@ -46,3 +46,8 @@ Thumbs.db
 STRUCTURE_NOTES.md
 scratch/
 tmp/
+
+# Not part of this research project
+node_modules/
+package.json
+package-lock.json
