@@ -27,6 +27,7 @@ results/*.csv
 results/*.npz
 results/*.npy
 results/*.json
+results/**/*.h5
 figures/*.pdf
 figures/*.png
 figures/*.svg
