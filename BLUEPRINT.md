@@ -7,6 +7,18 @@ Principal Investigator: Raj Rahul Mandal
 Faculty Advisor: Dr. Yang (Caldwell Summer Research Fellowship)
 Target Venue: Physical Review Applied
 Document Date: April 2026
+
+0. Live Execution Note (2026-04-22)
+Track B (homogeneous-cube Bloch-PBC verification) has now been run with a real
+FEniCSx/SLEPc solve and passes all three verification tests:
+`conda run -n kagome-hoti pytest -q tests/phase3/test_pbc.py -v --durations=5`
+reported `3 passed in 2128.93s (0:35:28)` on local hardware. This confirms the
+physics checks (Gamma rigid translations plus transverse/longitudinal
+plane-wave agreement) but fails the practical runtime target for iterative
+development. Immediate next action is a performance-focused Subtask 4.2 to
+bring the Track B test runtime below ~10 minutes without weakening physics
+criteria.
+
 1. Executive Summary and How to Read This Document
 This document is the complete technical blueprint for the computational phase of a research project that will produce a first-authored paper on a printable audio-frequency breathing kagome higher-order topological insulator plate. It is written for one reader, the principal investigator, and it assumes you are starting with no existing code, no simulation results, and no prior FEniCSx experience. Every assumption you must test, every number you must verify, and every decision you must make before writing code is stated explicitly.
 The document is organized in strict execution order. Section 2 states the research question, hypothesis, and scientific value. Section 3 lists every pre-code decision that is already locked. Section 4 explains the theoretical foundation in enough depth that you can verify your own derivations. Sections 5 through 10 are the six computational phases, each containing atomic steps with individual time estimates, verification criteria, and specific failure modes. Section 11 is the disorder protocol. Section 12 is the figure map for the paper. Section 13 is the complete milestone calendar at five hours per week. Section 14 is the risk register. Section 15 is the list of items to escalate to Dr. Yang versus decide independently.
