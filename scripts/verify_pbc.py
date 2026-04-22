@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from functools import lru_cache
 from typing import Callable
 
@@ -17,7 +19,7 @@ import dolfinx_mpc
 from src.params import MaterialParams
 
 L = 0.020
-N_HEX = 20
+N_HEX = int(os.environ.get("PBC_N_HEX", "20"))
 DEGREE = 2
 N_EIGS = 15
 GEOM_TOL = 1.0e-12
